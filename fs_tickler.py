@@ -1,60 +1,84 @@
 import pandas as pd
 from pathlib import Path
 
-input_dir = Path('./assets')
-output_dir = Path('./output')
-output_dir.mkdir(parents=True, exist_ok=True)
-
-for file_path in input_dir.glob('*.xlsx'):
-    # Read all data as strings and replace NaN with empty strings
-    df = pd.read_excel(
-        file_path, 
-        header=None, 
-        dtype=str, 
-        engine='openpyxl'
-    ).fillna('')  # Replace NaN with empty strings
-
-    all_data = []
-    index = 0
+def process_excel_files():
+    # Setup paths
+    input_dir = Path('./assets')
+    output_dir = Path('./outputs')
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    while index < len(df):
-        row = df.iloc[index]
-        customer_name = None
+    # Process each Excel file
+    for excel_path in input_dir.glob('*.xlsx'):
+        # Read raw data with all values as strings
+        df = pd.read_excel(
+            excel_path, 
+            header=None, 
+            dtype=str, 
+            engine='openpyxl'
+        ).fillna('')  # Replace empty cells with empty strings
         
-        # Check every cell in the row for "Customer Name: "
-        for cell in row:
-            if isinstance(cell, str) and cell.startswith('Customer Name: '):
-                customer_name = cell.split(': ')[1].strip()
-                break  # Exit loop once found
+        all_customers = []
+        current_customer = None
+        header = None
+        collecting_data = False
         
-        if customer_name:
-            index += 2  # Skip Customer Name row and blank line
-            if index >= len(df):
-                break
+        # Iterate through each row
+        for _, row in df.iterrows():
+            # Check for customer name row (always in first column)
+            if row[0].startswith('Customer Name: '):
+                # Save previous customer data if exists
+                if current_customer and current_customer['data']:
+                    all_customers.append(current_customer)
                 
-            # Get headers (ensure they're strings)
-            headers = df.iloc[index].astype(str).tolist()
-            index += 1
+                # Start new customer
+                current_customer = {
+                    'name': row[0].split(': ')[1].strip(),
+                    'header': None,
+                    'data': []
+                }
+                collecting_data = False
+                continue
             
-            data_rows = []
-            while index < len(df):
-                current_row = df.iloc[index]
-                # Stop at first completely empty row
-                if (current_row == '').all():
-                    break
-                # Convert all values to strings explicitly
-                data_rows.append(current_row.astype(str).tolist())
-                index += 1
-                
-            if data_rows:
-                customer_df = pd.DataFrame(data_rows, columns=headers)
-                customer_df['Customer Name'] = customer_name
-                all_data.append(customer_df)
-                
-            index += 1  # Skip blank line after data
-        else:
-            index += 1  # Move to next row if no customer name found
+            # Skip rows until we find a customer
+            if not current_customer:
+                continue
             
-    final_df = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
-    output_path = output_dir / file_path.name
-    final_df.to_excel(output_path, index=False, engine='openpyxl')
+            # Check for header row (comes after blank line following customer name)
+            if not collecting_data and row[0] == '':
+                collecting_data = True  # Next non-empty row will be header
+                continue
+                
+            if collecting_data and current_customer['header'] is None:
+                # Capture header row
+                current_customer['header'] = row.tolist()
+                collecting_data = True  # Next rows will be data
+                continue
+            
+            # Collect data rows until we hit a blank line
+            if collecting_data and current_customer['header'] is not None:
+                if row[0] == '':  # Blank line marks end of data
+                    # Save completed customer
+                    all_customers.append(current_customer)
+                    current_customer = None
+                    collecting_data = False
+                    continue
+                
+                # Add data row with customer name
+                data_row = row.tolist()
+                data_row.append(current_customer['name'])  # Add customer name as last column
+                current_customer['data'].append(data_row)
+        
+        # Create final DataFrame for this file
+        final_df = pd.DataFrame()
+        for customer in all_customers:
+            # Add header with 'Customer Name' as last column
+            customer_header = customer['header'] + ['Customer Name']
+            customer_df = pd.DataFrame(customer['data'], columns=customer_header)
+            final_df = pd.concat([final_df, customer_df], ignore_index=True)
+        
+        # Save to output
+        output_path = output_dir / excel_path.name
+        final_df.to_excel(output_path, index=False, engine='openpyxl')
+
+if __name__ == '__main__':
+    process_excel_files()
